@@ -28,9 +28,51 @@
 ## 6. Правила межсетевого экрана
 - UFW активен (`Status: active`), IPv6 включён.
 - Политики по умолчанию: входящий трафик `deny`/`DROP`, исходящий `allow`/`ACCEPT`, forwarding `deny`/`DROP`.
+- Разрешены входящие TCP-порты `80` (HTTP) и `443` (HTTPS).
 - Разрешён входящий TCP-порт `2222` (SSH); остальные входящие соединения запрещены политикой по умолчанию.
 
 ## 7. Снимки состояния
 - `01-clean-install`; исходный снимок для проверки восстановления.
 - `02-keys-configured`; снимок после настройки ключей аутентификации.
-- `03-ssh-hardened`; текущий снимок после настройки SSH.
+- `03-ssh-hardened`; снимок после настройки SSH.
+- `04-nginx-https`; снимок после настройки Nginx, перевода на HTTPS и публикации ресурса.
+
+## 8. Веб-сервер
+- Устанавливаемый пакет: `nginx` (Ubuntu 24.10, версия 1.24.0).
+- Установка: `sudo apt update && sudo apt install -y nginx`.
+- Служба: `nginx.service`; команды управления: `systemctl status nginx`, `systemctl reload nginx` (без разрыва соединений), `systemctl restart nginx` (с остановкой).
+- Синтаксическая проверка конфигурации: `sudo nginx -t`.
+- Основной конфигурационный файл: `/etc/nginx/nginx.conf`.
+- Каталог активных конфигураций: `/etc/nginx/sites-enabled/` (символические ссылки).
+- Каталог всех конфигураций: `/etc/nginx/sites-available/`.
+- Стандартный ресурс Nginx отключён: удалена ссылка `/etc/nginx/sites-enabled/default`, конфигурация сохранена.
+
+### Каталог ресурса
+- Путь: `/var/www/devops-site`.
+- Владелец и группа: `devops:devops` (рекурсивно).
+- Права: каталоги `755` (`drwxr-xr-x`), файлы `644` (`-rw-r--r--`).
+- Команды создания: `sudo mkdir -p /var/www/devops-site`, `sudo chown -R devops:devops /var/www/devops-site`
+
+### Конфигурация ресурса
+- Путь: `/etc/nginx/sites-available/devops-site` (символическая ссылка `/etc/nginx/sites-enabled/devops-site`).
+- Доменное имя (`server_name`): `devops.local`.
+- Порты: `80` (HTTP, блок перенаправления на HTTPS) и `443` (HTTPS с TLSv1.2/TLSv1.3).
+- Директивы: `root /var/www/devops-site; index index.html; try_files $uri $uri/ =404; error_page 404 /404.html;`.
+- Журналы: `/var/log/nginx/devops-site.access.log` и `/var/log/nginx/devops-site.error.log`.
+- Применение конфигурации: `sudo nginx -t && sudo systemctl reload nginx`.
+
+### TLS-сертификат (самоподписанный)
+- Путь к сертификату: `/etc/ssl/certs/devops.crt`, права `644`, владелец `root:root`.
+- Путь к закрытому ключу: `/etc/ssl/private/devops.key`, права `600`, владелец `root:root` (доступен только главному процессу Nginx, запущенному от `root`).
+- Срок действия: 365 дней.
+- Субъект: `CN=devops.local`.
+- Расширение SAN: `DNS:devops.local` (имя ресурса проверяется клиентами именно по SAN, CN не учитывается).
+- Команда формирования: `sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048`
+    `-keyout /etc/ssl/private/devops.key`
+    `-out /etc/ssl/certs/devops.crt`
+    `-subj "/CN=devops.local"`
+    `-addext "subjectAltName=DNS:devops.local"`
+- Примечание: параметр `-nodes` оставляет ключ незашифрованным (без запроса пароля при запуске службы); IP-адрес в SAN не включается, так как адрес Host-only сегмента назначается по DHCP и может измениться.
+
+
+
