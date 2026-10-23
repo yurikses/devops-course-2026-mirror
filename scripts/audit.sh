@@ -59,7 +59,7 @@ check "Служба docker активна" "active" \
 check "Контейнер СУБД в состоянии healthy" "healthy" \
     "$(run_remote "docker inspect -f '{{.State.Health.Status}}' app-db-1 2>/dev/null")"
 check "Порты 5000 и 5432 прослушиваются только на 127.0.0.1" "0" \
-    "$(run_remote "ss -tlnH 2>/dev/null | awk '\$4 ~ /:(5000|5432)\$/ && \$4 !~ /^127\\.0\\.0\\.2:/ {c++} END{print c+0}'")"
+    "$(run_remote "ss -tlnH 2>/dev/null | awk '\$4 ~ /:(5000|5432)\$/ && \$4 !~ /^127\\.0\\.0\\.1:/ {c++} END{print c+0}'")"
 check "Права файла ~/app/.env равны 600" "600" \
     "$(run_remote "stat -c '%a' ~/app/.env 2>/dev/null")"
 
