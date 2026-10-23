@@ -75,4 +75,64 @@
 - Примечание: параметр `-nodes` оставляет ключ незашифрованным (без запроса пароля при запуске службы); IP-адрес в SAN не включается, так как адрес Host-only сегмента назначается по DHCP и может измениться.
 
 
+## 9. Контейнер
 
+### Установка Docker Engine
+- Docker Engine установлен из официального репозитория Docker (пакет `docker-ce`); пакет `docker.io` из репозитория Ubuntu не используется.
+- Порядок установки: добавление GPG-ключа и репозитория Docker, затем `sudo apt update && sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin`.
+- Версия: `docker version` — раздел `Server` присутствует; на момент настройки — Docker Engine 28.x (точное значение фиксируется выводом команды).
+- Плагин Compose: `docker compose version` (Docker Compose v2).
+- Служба: `docker.service` — `active (running)`, включена в автозапуск (`systemctl enable docker`).
+
+### Учётная запись и группа docker
+- Учётная запись `devops` добавлена в группу `docker`: `sudo usermod -aG docker devops`; изменения применены в новой SSH-сессии.
+- Участники группы `docker`: `devops`. Другие учётные записи в группу не включены: членство в группе `docker` фактически эквивалентно правам root (возможность смонтировать каталог `/` хоста в контейнер с записью).
+- Проверка: `docker run --rm hello-world` без `sudo` — успешно.
+
+### Расположение проекта
+- Каталог проекта на сервере: `/home/devops/app`.
+- Доставка с хостовой системы: `rsync -avz --delete --exclude=.env app/ devops:app/`. Параметр `--exclude=.env` обязателен: файл `.env` создаётся только на сервере, и без исключения `--delete` удалил бы его при следующей доставке.
+- Состав каталога: `Dockerfile`, `.dockerignore`, `app.py`, `requirements.txt`, `docker-compose.yml`, `.env`, `.env.example`.
+- Файл `.env` в репозиторий не включается (`.gitignore`).
+
+### Файл .env
+- Путь: `/home/devops/app/.env`.
+- Права: `600` (`-rw-------`), владелец `devops:devops`.
+- Содержимое: `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` (случайное значение, `openssl rand -hex 16`), `DB_HOST=db`.
+- Шаблон `.env.example` содержит только имена переменных и заглушки; секреты в репозиторий не попадают.
+- Команды формирования: `cp .env.example .env`, `chmod 600 .env`, `sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env`.
+
+### Публикуемые порты и адреса
+- Сервис `app`: публикация `127.0.0.1:5000:5000` — порт 5000 доступен только на loopback-интерфейсе сервера; из сети и с хостовой системы напрямую недоступен.
+- Сервис `db`: порт не публикуется; приложение обращается к СУБД по имени `db` через сеть проекта `backend` (встроенный DNS Docker Compose).
+- Проверка: `sudo ss -tlnp | grep -E ':(5000|5432)\b'` — единственный прослушиваемый сокет `127.0.0.1:5000`; порт 5432 не прослушивается.
+- Порт 5000 не разрешён в UFW, но публикация на `127.0.0.1` исключает доступ извне. Публикация на `0.0.0.0` обошла бы UFW через цепочки iptables Docker, поэтому используется только адрес loopback.
+
+### Именованные тома
+- Том: `app_db_data` (объявлен как `db_data` в `docker-compose.yml`), монтируется в `/var/lib/postgresql/data` сервиса `db`.
+- Том сохраняется при `docker compose down` и удаляется только при `docker compose down -v`.
+- Тег образа СУБД: `postgres:16-alpine` (фиксированная основная версия; формат данных несовместим между основными версиями PostgreSQL).
+
+### Обратный прокси-сервер
+- Nginx из практической работы № 6 (`/etc/nginx/sites-available/devops-site`) дополнен блоком `location /app/` в секции HTTPS (`server` с `listen 443 ssl`).
+- Конфигурация (отступ 4 пробела — это блок кода в Markdown):
+
+    location /app/ {
+        proxy_pass http://127.0.0.1:5000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+- Завершающий `/` в `proxy_pass` заменяет префикс `/app/` на `/`: запрос `/app/health` передаётся приложению как `/health`.
+- Проверка и применение: `sudo nginx -t && sudo systemctl reload nginx`.
+- Доступ: `https://devops.local/app/` и `https://devops.local/app/health`; статический ресурс `https://devops.local/` сохраняется.
+- При остановленном контейнере приложения Nginx возвращает `502 Bad Gateway`; в `/var/log/nginx/devops-site.error.log` — запись `connect() failed (111: Connection refused) while connecting to upstream`.
+
+### Снимок состояния
+- `05-docker-compose` — снимок после запуска проекта (`docker compose up -d --build`), проверки состояния `db` (healthy) и сохранности данных.
+
+### Проверка
+- `docker compose ps` — сервис `db` в состоянии `(healthy)`, сервис `app` — `Up`.
+- `scripts/audit.sh`, раздел `[5] Контейнеризация` — проверки: активность `docker.service`; состояние `healthy` контейнера СУБД; отсутствие прослушивания портов 5000 и 5432 на адресах, кроме `127.0.0.1`; права `600` на `~/app/.env`.
